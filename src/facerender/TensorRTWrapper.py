@@ -39,21 +39,32 @@ class TensorRTWrapper():
             engine_data = f.read()
         self.engine = runtime.deserialize_cuda_engine(engine_data) # Converts bytes/ints back into ICudaEngine.
 
-    def __call__(self, input, output):
+    def __call__(self, input, outputs):
         stream = cuda.Stream() # Initialize CUDA data stream.
         d_input = cuda.mem_alloc(1 * input.nbytes) # Allocates memory in GPU for input data. Grabs the size of the input data in bytes.
-        d_output = cuda.mem_alloc(1 * output.nbytes) # Allocates memory in GPU for output data.
+        
+        if type(outputs) is list:
+            d_outputs = [cuda.mem_alloc(1 * output.nbytes) for output in outputs] # Allocates memory in GPU for output data.
+        else:
+            d_outputs = cuda.mem_alloc(1 * outputs.nbytes)
 
         tensor_names = [self.engine.get_tensor_name(i) for i in range(self.engine.num_io_tensors)] # Grabs the name of the input/output tensors.
         
         context = self.engine.create_execution_context() # Context used for inference. Might be worth exploring having multiple contexts so multiple batches can be inferred simultaneously.
         context.set_tensor_address(tensor_names[0], int(d_input)) # Sets where in the GPU memory the input tensor will be stored and used.
-        context.set_tensor_address(tensor_names[1], int(d_output)) # Sets in the GPU memory where the output tensor will be stored and used.
+        
+        if type(outputs) is list:
+            [context.set_tensor_address(tensor_names[i], int(d_outputs[i-1])) for i in range(1, len(tensor_names))] # Sets in the GPU memory where the output tensor will be stored and used.
+        else:
+            context.set_tensor_address(tensor_names[1], int(d_outputs))
         
         cuda.memcpy_htod_async(d_input, input, stream) # Copies the input "input" to the GPU memory address "d_input". Serializes the input through the stream "stream".
         
         context.execute_async_v3(stream.handle) # Performs inference on the GPU asynchronously.
 
-        cuda.memcpy_dtoh_async(output, d_output, stream) # Copies output tensor back into our parameter "output" from the GPU memory address "d_output". Serializes output through the stream "stream".
+        if type(outputs) is list:
+            [cuda.memcpy_dtoh_async(outputs[i], d_outputs[i], stream) for i in range(len(outputs))]
+        else:
+            cuda.memcpy_dtoh_async(outputs, d_outputs, stream) # Copies output tensor back into our parameter "output" from the GPU memory address "d_output". Serializes output through the stream "stream".
 
         stream.synchronize() # Waits for all activity on the stream to finish before continuing on in the method.
