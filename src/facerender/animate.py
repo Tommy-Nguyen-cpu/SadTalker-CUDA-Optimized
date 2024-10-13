@@ -23,7 +23,8 @@ from pydub import AudioSegment
 from src.utils.face_enhancer import enhancer_generator_with_len, enhancer_list
 from src.utils.paste_pic import paste_pic
 from src.utils.videoio import save_video_with_watermark
-
+import tensorrt as trt
+from src.facerender.TensorRTWrapper import TensorRTWrapper
 try:
     import webui  # in webui
     in_webui = True
@@ -32,27 +33,53 @@ except:
 
 class AnimateFromCoeff():
 
-    def __init__(self, sadtalker_path, device):
+    def __init__(self, sadtalker_path, device, half=False):
 
         with open(sadtalker_path['facerender_yaml']) as f:
             config = yaml.safe_load(f)
 
         generator = OcclusionAwareSPADEGenerator(**config['model_params']['generator_params'],
                                                     **config['model_params']['common_params'])
-        kp_extractor = KPDetector(**config['model_params']['kp_detector_params'],
-                                    **config['model_params']['common_params'])
+        # kp_extractor = KPDetector(**config['model_params']['kp_detector_params'],
+        #                             **config['model_params']['common_params'])
+        kp_extractor = TensorRTWrapper()
+        kp_extractor.load_engine("../scripts/kp_detector.trt")
+        
+        # Create a TensorRT logger
+        # logger = trt.Logger(trt.Logger.ERROR)
+
+        # # Create a TensorRT builder and network
+        # builder = trt.Builder(logger)
+        # network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
+
+        # Parse the ONNX model
+        # parser = trt.OnnxParser(network, logger)
+        # with open("kp_detector.onnx", "rb") as model:
+        #     if not parser.parse(model.read()):
+        #         print("ERROR: Failed to parse ONNX model.")
+        #         for error in range(parser.num_errors):
+        #             print(parser.get_error(error))
+        #         return None
+
+        # # Configure builder
+        # config = builder.create_builder_config()
+        # config.max_workspace_size = 1 << 30  # 1 GB
+        # builder.max_batch_size = 1
+
+        # # Build the engine
+        # engine = builder.build_cuda_engine(network)
         he_estimator = HEEstimator(**config['model_params']['he_estimator_params'],
                                **config['model_params']['common_params'])
         mapping = MappingNet(**config['model_params']['mapping_params'])
 
         generator.to(device)
-        kp_extractor.to(device)
+        # kp_extractor.to(device)
         he_estimator.to(device)
         mapping.to(device)
         for param in generator.parameters():
             param.requires_grad = False
-        for param in kp_extractor.parameters():
-            param.requires_grad = False 
+        # for param in kp_extractor.parameters():
+        #     param.requires_grad = False 
         for param in he_estimator.parameters():
             param.requires_grad = False
         for param in mapping.parameters():
@@ -76,12 +103,13 @@ class AnimateFromCoeff():
         self.he_estimator = he_estimator
         self.mapping = mapping
 
-        self.kp_extractor.eval()
+        # self.kp_extractor.eval()
         self.generator.eval()
         self.he_estimator.eval()
         self.mapping.eval()
          
         self.device = device
+        self.half = half
     
     def load_cpk_facevid2vid_safetensor(self, checkpoint_path, generator=None, 
                         kp_detector=None, he_estimator=None,  
@@ -95,12 +123,12 @@ class AnimateFromCoeff():
                 if 'generator' in k:
                     x_generator[k.replace('generator.', '')] = v
             generator.load_state_dict(x_generator)
-        if kp_detector is not None:
-            x_generator = {}
-            for k,v in checkpoint.items():
-                if 'kp_extractor' in k:
-                    x_generator[k.replace('kp_extractor.', '')] = v
-            kp_detector.load_state_dict(x_generator)
+        # if kp_detector is not None:
+        #     x_generator = {}
+        #     for k,v in checkpoint.items():
+        #         if 'kp_extractor' in k:
+        #             x_generator[k.replace('kp_extractor.', '')] = v
+        #     kp_detector.load_state_dict(x_generator)
         if he_estimator is not None:
             x_generator = {}
             for k,v in checkpoint.items():
@@ -117,8 +145,8 @@ class AnimateFromCoeff():
         checkpoint = torch.load(checkpoint_path, map_location=torch.device(device))
         if generator is not None:
             generator.load_state_dict(checkpoint['generator'])
-        if kp_detector is not None:
-            kp_detector.load_state_dict(checkpoint['kp_detector'])
+        # if kp_detector is not None:
+        #     kp_detector.load_state_dict(checkpoint['kp_detector'])
         if he_estimator is not None:
             he_estimator.load_state_dict(checkpoint['he_estimator'])
         if discriminator is not None:
@@ -133,8 +161,8 @@ class AnimateFromCoeff():
                 optimizer_discriminator.load_state_dict(checkpoint['optimizer_discriminator'])
             except RuntimeError as e:
                 print ('No discriminator optimizer in the state-dict. Optimizer will be not initialized')
-        if optimizer_kp_detector is not None:
-            optimizer_kp_detector.load_state_dict(checkpoint['optimizer_kp_detector'])
+        # if optimizer_kp_detector is not None:
+        #     optimizer_kp_detector.load_state_dict(checkpoint['optimizer_kp_detector'])
         if optimizer_he_estimator is not None:
             optimizer_he_estimator.load_state_dict(checkpoint['optimizer_he_estimator'])
 
@@ -179,10 +207,10 @@ class AnimateFromCoeff():
             roll_c_seq = None
 
         frame_num = x['frame_num']
-
+        
         predictions_video = make_animation(source_image, source_semantics, target_semantics,
                                         self.generator, self.kp_extractor, self.he_estimator, self.mapping, 
-                                        yaw_c_seq, pitch_c_seq, roll_c_seq, use_exp = True)
+                                        yaw_c_seq, pitch_c_seq, roll_c_seq, use_exp = True, use_half=self.half)
 
         predictions_video = predictions_video.reshape((-1,)+predictions_video.shape[2:])
         predictions_video = predictions_video[:frame_num]
@@ -254,4 +282,3 @@ class AnimateFromCoeff():
         os.remove(new_audio_path)
 
         return return_path
-

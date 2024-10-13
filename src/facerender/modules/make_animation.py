@@ -2,7 +2,7 @@ from scipy.spatial import ConvexHull
 import torch
 import torch.nn.functional as F
 import numpy as np
-from tqdm import tqdm 
+from tqdm import tqdm
 
 def normalize_kp(kp_source, kp_driving, kp_driving_initial, adapt_movement_scale=False,
                  use_relative_movement=False, use_relative_jacobian=False):
@@ -105,8 +105,12 @@ def make_animation(source_image, source_semantics, target_semantics,
                             use_exp=True, use_half=False):
     with torch.no_grad():
         predictions = []
+        generator = generator.half() if use_half else generator
 
-        kp_canonical = kp_detector(source_image)
+        kp_canonical = np.empty((2, 15, 3), dtype = np.float32)
+        kp_detector(source_image.cpu().numpy().astype(np.float32), kp_canonical)
+        kp_canonical = torch.from_numpy(kp_canonical).to("cuda:0")
+        kp_canonical = {"value" : kp_canonical}
         he_source = mapping(source_semantics)
         kp_source = keypoint_transformation(kp_canonical, he_source)
     
@@ -125,7 +129,12 @@ def make_animation(source_image, source_semantics, target_semantics,
             kp_driving = keypoint_transformation(kp_canonical, he_driving)
                 
             kp_norm = kp_driving
+            if use_half:
+                source_image = source_image.half()
+                kp_source = {k: v.half() for k, v in kp_source.items()}
+                kp_norm = {k: v.half() for k, v in kp_norm.items()}
             out = generator(source_image, kp_source=kp_source, kp_driving=kp_norm)
+            # torch.onnx.export(generator, args={"source_image" : source_image, "kp_source" : kp_source, "kp_driving" : kp_norm}, f="face_render.onnx", export_params=True)
             '''
             source_image_new = out['prediction'].squeeze(1)
             kp_canonical_new =  kp_detector(source_image_new)

@@ -12,6 +12,7 @@ from src.face3d.models import networks
 
 from scipy.io import loadmat, savemat
 from src.utils.croper import Preprocesser
+from src.facerender.TensorRTWrapper import TensorRTWrapper
 
 
 import warnings
@@ -47,16 +48,18 @@ class CropAndExtract():
     def __init__(self, sadtalker_path, device):
 
         self.propress = Preprocesser(device)
-        self.net_recon = networks.define_net_recon(net_recon='resnet50', use_last_fc=False, init_path='').to(device)
+        self.net_recon = TensorRTWrapper()
+        self.net_recon.load_engine("../scripts/netrecon.engine")
+        # self.net_recon = networks.define_net_recon(net_recon='resnet50', use_last_fc=False, init_path='').to(device)
         
-        if sadtalker_path['use_safetensor']:
-            checkpoint = safetensors.torch.load_file(sadtalker_path['checkpoint'])    
-            self.net_recon.load_state_dict(load_x_from_safetensor(checkpoint, 'face_3drecon'))
-        else:
-            checkpoint = torch.load(sadtalker_path['path_of_net_recon_model'], map_location=torch.device(device))    
-            self.net_recon.load_state_dict(checkpoint['net_recon'])
+        # if sadtalker_path['use_safetensor']:
+        #     checkpoint = safetensors.torch.load_file(sadtalker_path['checkpoint'])    
+        #     self.net_recon.load_state_dict(load_x_from_safetensor(checkpoint, 'face_3drecon'))
+        # else:
+        #     checkpoint = torch.load(sadtalker_path['path_of_net_recon_model'], map_location=torch.device(device))    
+        #     self.net_recon.load_state_dict(checkpoint['net_recon'])
 
-        self.net_recon.eval()
+        # self.net_recon.eval()
         self.lm3d_std = load_lm3d(sadtalker_path['dir_of_BFM_fitting'])
         self.device = device
     
@@ -149,7 +152,10 @@ class CropAndExtract():
                 im_t = torch.tensor(np.array(im1)/255., dtype=torch.float32).permute(2, 0, 1).to(self.device).unsqueeze(0)
                 
                 with torch.no_grad():
-                    full_coeff = self.net_recon(im_t)
+                    full_coeff = torch.zeros((1, 257)).numpy()
+                    im_t = np.ascontiguousarray(im_t.cpu())
+                    self.net_recon(im_t, full_coeff)
+                    full_coeff = torch.from_numpy(full_coeff).to("cuda")
                     coeffs = split_coeff(full_coeff)
 
                 pred_coeff = {key:coeffs[key].cpu().numpy() for key in coeffs}
