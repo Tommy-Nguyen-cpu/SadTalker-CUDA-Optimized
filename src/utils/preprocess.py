@@ -49,7 +49,7 @@ class CropAndExtract():
 
         self.propress = Preprocesser(device)
         self.net_recon = TensorRTWrapper()
-        self.net_recon.load_engine("../scripts/netrecon.engine")
+        self.net_recon.load_engine("../Sebastian-2.0/scripts/netrecon.engine")
         # self.net_recon = networks.define_net_recon(net_recon='resnet50', use_last_fc=False, init_path='').to(device)
         
         # if sadtalker_path['use_safetensor']:

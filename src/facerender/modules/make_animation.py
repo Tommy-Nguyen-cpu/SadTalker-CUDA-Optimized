@@ -107,10 +107,12 @@ def make_animation(source_image, source_semantics, target_semantics,
         predictions = []
         generator = generator.half() if use_half else generator
 
-        kp_canonical = np.empty((2, 15, 3), dtype = np.float32)
-        kp_detector(source_image.cpu().numpy().astype(np.float32), kp_canonical)
+        kp_canonical = np.empty((4, 15, 3), dtype = np.float32)
+        input_image = source_image.cpu().numpy().astype(np.float32)
+        input_image = np.concatenate((input_image, input_image), axis=0)
+        kp_detector(input_image, kp_canonical)
         kp_canonical = torch.from_numpy(kp_canonical).to("cuda:0")
-        kp_canonical = {"value" : kp_canonical}
+        kp_canonical = {"value" : kp_canonical[2:4, :, :]}
         he_source = mapping(source_semantics)
         kp_source = keypoint_transformation(kp_canonical, he_source)
     

@@ -37,7 +37,7 @@ def main(args):
 
     audio_to_coeff = Audio2Coeff(sadtalker_paths,  device)
     
-    animate_from_coeff = AnimateFromCoeff(sadtalker_paths, device)
+    animate_from_coeff = AnimateFromCoeff(sadtalker_paths, device, args.half)
 
     #crop image and extract 3dmm from image
     first_frame_dir = os.path.join(save_dir, 'first_frame_dir')
@@ -101,7 +101,7 @@ if __name__ == '__main__':
     parser.add_argument("--source_image", default='./examples/source_image/full_body_1.png', help="path to source image")
     parser.add_argument("--ref_eyeblink", default=None, help="path to reference video providing eye blinking")
     parser.add_argument("--ref_pose", default=None, help="path to reference video providing pose")
-    parser.add_argument("--checkpoint_dir", default='./checkpoints', help="path to output")
+    parser.add_argument("--checkpoint_dir", default='../Sebastian-2.0/SadTalker/checkpoints', help="path to output")
     parser.add_argument("--result_dir", default='./results', help="path to output")
     parser.add_argument("--pose_style", type=int, default=0,  help="input pose style from [0, 46)")
     parser.add_argument("--batch_size", type=int, default=2,  help="the batch size of facerender")
@@ -133,6 +133,7 @@ if __name__ == '__main__':
     parser.add_argument('--camera_d', type=float, default=10.)
     parser.add_argument('--z_near', type=float, default=5.)
     parser.add_argument('--z_far', type=float, default=15.)
+    parser.add_argument("--half", action="store_true", help="use half precision or not" )
 
     args = parser.parse_args()
 

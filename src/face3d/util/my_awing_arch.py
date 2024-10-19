@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from src.facerender.TensorRTWrapper import TensorRTWrapper
 
 
 def calculate_points(heatmaps):
@@ -376,3 +377,38 @@ class FAN(nn.Module):
         pred += offset[-2:]
 
         return pred
+
+class FANTensorRT():
+    def __init__(self, model_path):
+        self.model = TensorRTWrapper()
+        self.model.load_engine(model_path)
+
+    def get_landmarks(self, img):
+            H, W, _ = img.shape
+            offset = W / 64, H / 64, 0, 0
+
+            img = cv2.resize(img, (256, 256))
+            inp = img[..., ::-1]
+            inp = torch.from_numpy(np.ascontiguousarray(inp.transpose((2, 0, 1)))).float()
+            # inp = inp.to(self.device)
+            inp.div_(255.0).unsqueeze_(0)
+
+            outputs = [np.zeros((1, 99, 64, 64), dtype=np.float32) for _ in range(4)]
+            boundary_channels = [np.zeros((1, 2, 64, 64), dtype=np.float32) for _ in range(4)]
+            outputs += boundary_channels
+
+            self.model(inp.numpy(), outputs)
+            outputs = outputs[:4]
+
+            out = outputs[-1][:, :-1, :, :]
+            heatmaps = out# .detach().cpu().numpy()
+            # print(f"Output: {out}")
+
+            pred = calculate_points(heatmaps).reshape(-1, 2)
+
+            pred *= offset[:2]
+            pred += offset[-2:]
+
+            # print(f"Pred mean: {pred}")
+
+            return pred

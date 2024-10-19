@@ -43,7 +43,7 @@ class AnimateFromCoeff():
         # kp_extractor = KPDetector(**config['model_params']['kp_detector_params'],
         #                             **config['model_params']['common_params'])
         kp_extractor = TensorRTWrapper()
-        kp_extractor.load_engine("../scripts/kp_detector.trt")
+        kp_extractor.load_engine("../Sebastian-2.0/scripts/kp_detector.trt")
         
         # Create a TensorRT logger
         # logger = trt.Logger(trt.Logger.ERROR)
