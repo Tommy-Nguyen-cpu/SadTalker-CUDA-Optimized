@@ -378,6 +378,8 @@ class FAN(nn.Module):
 
         return pred
 
+# TODO: This is causing issues again. This time, it isn't because the shape is off. I don't know why its happening.
+# It's failing even if we dont enable lazy-loading.
 class FANTensorRT():
     def __init__(self, model_path):
         self.model = TensorRTWrapper()
@@ -397,7 +399,7 @@ class FANTensorRT():
             boundary_channels = [np.zeros((1, 2, 64, 64), dtype=np.float32) for _ in range(4)]
             outputs += boundary_channels
 
-            self.model(inp.numpy(), outputs)
+            outputs = self.model(inp.numpy(), outputs)
             outputs = outputs[:4]
 
             out = outputs[-1][:, :-1, :, :]

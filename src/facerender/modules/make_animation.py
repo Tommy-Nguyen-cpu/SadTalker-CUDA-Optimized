@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from tqdm import tqdm
+from time import time
 
 def normalize_kp(kp_source, kp_driving, kp_driving_initial, adapt_movement_scale=False,
                  use_relative_movement=False, use_relative_jacobian=False):
@@ -107,14 +108,21 @@ def make_animation(source_image, source_semantics, target_semantics,
         predictions = []
         generator = generator.half() if use_half else generator
 
+        start = time()
         kp_canonical = np.empty((4, 15, 3), dtype = np.float32)
         input_image = source_image.cpu().numpy().astype(np.float32)
         input_image = np.concatenate((input_image, input_image), axis=0)
-        kp_detector(input_image, kp_canonical)
-        kp_canonical = torch.from_numpy(kp_canonical).to("cuda:0")
+        kp_canonical = kp_detector(input_image, kp_canonical)
+        kp_canonical = kp_canonical.to("cuda")
         kp_canonical = {"value" : kp_canonical[2:4, :, :]}
+        print(f"kp_canonical took: {time() - start}")
+
+        start = time()
         he_source = mapping(source_semantics)
         kp_source = keypoint_transformation(kp_canonical, he_source)
+        print(f"Mapping took: {time() - start}")
+        print(f"source semantic shape: {source_semantics.shape}")
+        # print(f"Mapping output shape: {he_source.shape}")
     
         for frame_idx in tqdm(range(target_semantics.shape[1]), 'Face Renderer:'):
             # still check the dimension
@@ -135,8 +143,14 @@ def make_animation(source_image, source_semantics, target_semantics,
                 source_image = source_image.half()
                 kp_source = {k: v.half() for k, v in kp_source.items()}
                 kp_norm = {k: v.half() for k, v in kp_norm.items()}
+            
+            start = time()
             out = generator(source_image, kp_source=kp_source, kp_driving=kp_norm)
-            # torch.onnx.export(generator, args={"source_image" : source_image, "kp_source" : kp_source, "kp_driving" : kp_norm}, f="face_render.onnx", export_params=True)
+            # print(f"Generator took: {time() - start}")
+            # torch.onnx.export(generator, args={"source_image" : source_image, "kp_source" : kp_source, "kp_driving" : kp_norm}, f="face_render.onnx", export_params=True, opset_version=20)
+            # print("Finished saving!")
+            # print(f"Source image shape: {source_image.shape}")
+            # break
             '''
             source_image_new = out['prediction'].squeeze(1)
             kp_canonical_new =  kp_detector(source_image_new)

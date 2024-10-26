@@ -49,7 +49,7 @@ class CropAndExtract():
 
         self.propress = Preprocesser(device)
         self.net_recon = TensorRTWrapper()
-        self.net_recon.load_engine("../Sebastian-2.0/scripts/netrecon.engine")
+        self.net_recon.load_engine("../scripts/netrecon.engine")
         # self.net_recon = networks.define_net_recon(net_recon='resnet50', use_last_fc=False, init_path='').to(device)
         
         # if sadtalker_path['use_safetensor']:
@@ -154,8 +154,7 @@ class CropAndExtract():
                 with torch.no_grad():
                     full_coeff = torch.zeros((1, 257)).numpy()
                     im_t = np.ascontiguousarray(im_t.cpu())
-                    self.net_recon(im_t, full_coeff)
-                    full_coeff = torch.from_numpy(full_coeff).to("cuda")
+                    full_coeff = self.net_recon(im_t, full_coeff)
                     coeffs = split_coeff(full_coeff)
 
                 pred_coeff = {key:coeffs[key].cpu().numpy() for key in coeffs}

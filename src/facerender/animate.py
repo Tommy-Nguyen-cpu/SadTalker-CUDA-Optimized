@@ -25,6 +25,7 @@ from src.utils.paste_pic import paste_pic
 from src.utils.videoio import save_video_with_watermark
 import tensorrt as trt
 from src.facerender.TensorRTWrapper import TensorRTWrapper
+from time import time
 try:
     import webui  # in webui
     in_webui = True
@@ -43,7 +44,7 @@ class AnimateFromCoeff():
         # kp_extractor = KPDetector(**config['model_params']['kp_detector_params'],
         #                             **config['model_params']['common_params'])
         kp_extractor = TensorRTWrapper()
-        kp_extractor.load_engine("../Sebastian-2.0/scripts/kp_detector.trt")
+        kp_extractor.load_engine("../scripts/kp_detector.engine")
         
         # Create a TensorRT logger
         # logger = trt.Logger(trt.Logger.ERROR)
@@ -208,9 +209,12 @@ class AnimateFromCoeff():
 
         frame_num = x['frame_num']
         
+        print("Starting make animation method...")
+        start = time()
         predictions_video = make_animation(source_image, source_semantics, target_semantics,
                                         self.generator, self.kp_extractor, self.he_estimator, self.mapping, 
                                         yaw_c_seq, pitch_c_seq, roll_c_seq, use_exp = True, use_half=self.half)
+        print(f"Make animation took {time() - start}")
 
         predictions_video = predictions_video.reshape((-1,)+predictions_video.shape[2:])
         predictions_video = predictions_video[:frame_num]
