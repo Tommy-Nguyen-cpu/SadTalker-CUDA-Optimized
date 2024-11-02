@@ -198,6 +198,88 @@ class OcclusionAwareSPADEGenerator(nn.Module):
 
         self.decoder = SPADEDecoder()
 
+
+    # TODO: At least it doesn't outright fail? It is able to generate the image, but the images do not move at all.
+    def grid_sample_5d(self, input_tensor, grid):
+        """
+        Performs 5D grid sampling on the input tensor using the provided grid.
+
+        Args:
+            input_tensor: A 5D input tensor of shape (B, C, D, H, W).
+            grid: A 5D grid tensor of shape (B, D, H, W, 5).
+
+        Returns:
+            The sampled tensor of the same shape as the input tensor.
+        """
+
+        B, C, D, H, W = input_tensor.shape
+        _, _, _, _, grid_dims = grid.shape
+
+        # Flatten the input tensor and grid
+        input_flat = input_tensor.reshape(-1, C)
+        grid_flat = grid.reshape(-1, grid_dims)
+
+        # Extract grid coordinates
+        x, y, z = grid_flat[:, 0], grid_flat[:, 1], grid_flat[:, 2]
+
+        # Clip coordinates to valid range
+        x = torch.clip(x, 0, D - 1)
+        y = torch.clip(y, 0, H - 1)
+        z = torch.clip(z, 0, W - 1)
+
+        # Calculate integer and fractional parts of coordinates
+        x0 = torch.floor(x).type(torch.int8)
+        x1 = x0 + 1
+        y0 = torch.floor(y).type(torch.int8)
+        y1 = y0 + 1
+        z0 = torch.floor(z).type(torch.int8)
+        z1 = z0 + 1
+
+        # Calculate weights for bilinear interpolation
+        wx = x - x0
+        wy = y - y0
+        wz = z - z0
+
+        wx = wx.reshape(-1, 1)
+        wy = wy.reshape(-1, 1)
+        wz = wz.reshape(-1, 1)
+
+        # Access the 8 nearest neighbors in the input tensor
+        indices = torch.clip(B * C * (z0 * H * W + y0 * W + x0)+ torch.arange(len(x), device = input_tensor.device), 0, len(input_flat)-1)
+        indices1 = torch.clip(B * C * (z0 * H * W + y0 * W + x1)+ torch.arange(len(x), device = input_tensor.device), 0, len(input_flat)-1)
+        indices2 = torch.clip(B * C * (z1 * H * W + y0 * W + x0)+ torch.arange(len(x), device = input_tensor.device), 0, len(input_flat)-1)
+        indices3 = torch.clip(B * C * (z1 * H * W + y0 * W + x1)+ torch.arange(len(x), device = input_tensor.device), 0, len(input_flat)-1)
+        indices4 = torch.clip(B * C * (z0 * H * W + y1 * W + x0)+ torch.arange(len(x), device = input_tensor.device), 0, len(input_flat)-1)
+        indices5 = torch.clip(B * C * (z0 * H * W + y1 * W + x1)+ torch.arange(len(x), device = input_tensor.device), 0, len(input_flat)-1)
+        indices6 = torch.clip(B * C * (z1 * H * W + y1 * W + x0)+ torch.arange(len(x), device = input_tensor.device), 0, len(input_flat)-1)
+        indices7 = torch.clip(B * C * (z1 * H * W + y1 * W + x1)+ torch.arange(len(x), device = input_tensor.device), 0, len(input_flat)-1)
+
+        values = input_flat[indices]
+        values1 = input_flat[indices1]
+        values2 = input_flat[indices2]
+        values3 = input_flat[indices3]
+        values4 = input_flat[indices4]
+        values5 = input_flat[indices5]
+        values6 = input_flat[indices6]
+        values7 = input_flat[indices7]
+
+        # Perform bilinear interpolation
+        sampled_values = (
+            values * (1 - wx) * (1 - wy) * (1 - wz) +
+            values1 * wx * (1 - wy) * (1 - wz) +
+            values2 * (1 - wx) * (1 - wy) * wz +
+            values3 * wx * (1 - wy) * wz +
+            values4 * (1 - wx) * wy * (1 - wz) +
+            values5 * wx * wy * (1 - wz) +
+            values6 * (1 - wx) * wy * wz +
+            values7 * wx * wy * wz
+        )
+
+        # Reshape the sampled values back to the original shape
+        sampled_tensor = sampled_values.reshape(B, C, D, H, W)
+
+        return sampled_tensor
+
     def deform_input(self, inp, deformation):
         _, d_old, h_old, w_old, _ = deformation.shape
         _, _, d, h, w = inp.shape
