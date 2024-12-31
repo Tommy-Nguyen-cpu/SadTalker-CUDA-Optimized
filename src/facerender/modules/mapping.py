@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from src.facerender.TensorRTWrapper import TensorRTWrapper
 
 
 class MappingNet(nn.Module):
@@ -44,4 +45,32 @@ class MappingNet(nn.Module):
         t = self.fc_t(out)
         exp = self.fc_exp(out)
 
-        return {'yaw': yaw, 'pitch': pitch, 'roll': roll, 't': t, 'exp': exp} 
+        return {'yaw': yaw, 'pitch': pitch, 'roll': roll, 't': t, 'exp': exp}
+
+class MappingTensorRT():
+    def __init__(self, model_path):
+        self.model = TensorRTWrapper()
+        if ".onnx" in model_path.lower():
+             self.model.create_engine(onnx_file_path=model_path)
+             self.model.save_engine("mapping.engine")
+        else:
+            self.model.load_engine(model_path)
+
+    def __call__(self, input_3dmm):
+            yaw = np.zeros((2, 66), dtype=np.float32)
+            pitch = np.zeros((2, 66), dtype=np.float32)
+            roll = np.zeros((2, 66), dtype=np.float32)
+            t = np.zeros((2, 3), dtype=np.float32)
+            exp = np.zeros((2, 45), dtype=np.float32)
+
+            outputs = self.model(input_3dmm.cpu().numpy(), [yaw, pitch, roll, t, exp])
+
+            outputs = [output.to("cuda") for output in outputs]
+            # print(f"Pred mean: {pred}")
+            # print(f"yaw: {outputs[0].shape}")
+            # print(f"pitch: {outputs[1].shape}")
+            # print(f"roll: {outputs[2].shape}")
+            # print(f"t: {outputs[3].shape}")
+            # print(f"exp: {outputs[4].shape}")
+
+            return {'yaw': outputs[0], 'pitch': outputs[1], 'roll': outputs[2], 't': outputs[3], 'exp': outputs[4]}

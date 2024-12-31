@@ -120,6 +120,8 @@ def make_animation(source_image, source_semantics, target_semantics,
         start = time()
         he_source = mapping(source_semantics)
         kp_source = keypoint_transformation(kp_canonical, he_source)
+        # torch.onnx.export(mapping, args={"input_3dmm" : source_semantics}, f="../scripts/mapping.onnx", export_params=True, opset_version=20)
+        print(f"yaw: {he_source['yaw']}\n pitch: {he_source['pitch']}\n roll: {he_source['roll']}\n t: {he_source['t']}\n exp: {he_source['exp']}")
         print(f"Mapping took: {time() - start}")
         print(f"source semantic shape: {source_semantics.shape}")
         # print(f"Mapping output shape: {he_source.shape}")
@@ -146,6 +148,10 @@ def make_animation(source_image, source_semantics, target_semantics,
             
             start = time()
             out = generator(source_image, kp_source=kp_source, kp_driving=kp_norm)
+            # if frame_idx == 0:
+            #     print(f"Input shape: {source_image.shape}")
+            #     torch.onnx.export(generator, args={"source_image" : source_image, "kp_source" : kp_source, "kp_driving" : kp_norm}, f="generator_new.onnx", export_params=True, opset_version=20)
+
             # print(f"Generator took: {time() - start}")
             # torch.onnx.export(generator, args={"source_image" : source_image, "kp_source" : kp_source, "kp_driving" : kp_norm}, f="face_render.onnx", export_params=True, opset_version=20)
             # print("Finished saving!")
@@ -160,7 +166,7 @@ def make_animation(source_image, source_semantics, target_semantics,
             out = generator(source_image_new, kp_source=kp_source_new, kp_driving=kp_driving_new)
             '''
             predictions.append(out['prediction'])
-        predictions_ts = torch.stack(predictions, dim=1)
+        predictions_ts =  torch.stack(predictions, dim=1)
     return predictions_ts
 
 class AnimateModel(torch.nn.Module):
