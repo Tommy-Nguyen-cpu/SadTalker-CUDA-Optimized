@@ -198,87 +198,68 @@ class OcclusionAwareSPADEGenerator(nn.Module):
 
         self.decoder = SPADEDecoder()
 
-
-    # TODO: At least it doesn't outright fail? It is able to generate the image, but the images do not move at all.
-    def grid_sample_5d(self, input_tensor, grid):
+    def grid_sample_5d(self, input, grid, mode='linear', padding_mode='zeros', align_corners=True):
         """
-        Performs 5D grid sampling on the input tensor using the provided grid.
+        Custom implementation of 5D grid sampling.
 
         Args:
-            input_tensor: A 5D input tensor of shape (B, C, D, H, W).
-            grid: A 5D grid tensor of shape (B, D, H, W, 5).
+            input (torch.Tensor): Input tensor of shape (N, C, D, H, W, T).
+            grid (torch.Tensor): Sampling grid of shape (N, D_out, H_out, W_out, T_out, 5).
+            mode (str): Interpolation mode ('linear' for multilinear).
+            padding_mode (str): Padding mode ('zeros', 'border', or 'reflection').
+            align_corners (bool): Align corners flag for coordinate normalization.
 
         Returns:
-            The sampled tensor of the same shape as the input tensor.
+            torch.Tensor: Output tensor of shape (N, C, D_out, H_out, W_out, T_out).
         """
+        C, D, H, W, T = input.shape
+        D_out, H_out, W_out, T_out, _ = grid.shape
 
-        B, C, D, H, W = input_tensor.shape
-        _, _, _, _, grid_dims = grid.shape
+        # Normalize grid to match the input dimensions
+        def normalize(coords, size):
+            if align_corners:
+                return (coords + 1) * (size - 1) / 2
+            else:
+                return ((coords + 1) * size - 1) / 2
 
-        # Flatten the input tensor and grid
-        input_flat = input_tensor.reshape(-1, C)
-        grid_flat = grid.reshape(-1, grid_dims)
+        # Normalize grid coordinates
+        grid = torch.stack([normalize(grid[..., i], size)
+                            for i, size in enumerate([T, W, H, D, C])], dim=-1)
 
         # Extract grid coordinates
-        x, y, z = grid_flat[:, 0], grid_flat[:, 1], grid_flat[:, 2]
+        t, w, h, d, c = [grid[..., i] for i in range(5)]
 
-        # Clip coordinates to valid range
-        x = torch.clip(x, 0, D - 1)
-        y = torch.clip(y, 0, H - 1)
-        z = torch.clip(z, 0, W - 1)
+        # Clamp coordinates within bounds
+        t0, t1 = t.floor().long(), t.ceil().long()
+        w0, w1 = w.floor().long(), w.ceil().long()
+        h0, h1 = h.floor().long(), h.ceil().long()
+        d0, d1 = d.floor().long(), d.ceil().long()
+        c0, c1 = c.floor().long(), c.ceil().long()
 
-        # Calculate integer and fractional parts of coordinates
-        x0 = torch.floor(x).type(torch.int8)
-        x1 = x0 + 1
-        y0 = torch.floor(y).type(torch.int8)
-        y1 = y0 + 1
-        z0 = torch.floor(z).type(torch.int8)
-        z1 = z0 + 1
+        # Ensure coordinates stay within valid range
+        def safe_index(x, max_size):
+            return torch.clamp(x, 0, max_size - 1)
 
-        # Calculate weights for bilinear interpolation
-        wx = x - x0
-        wy = y - y0
-        wz = z - z0
+        t0, t1 = safe_index(t0, T), safe_index(t1, T)
+        w0, w1 = safe_index(w0, W), safe_index(w1, W)
+        h0, h1 = safe_index(h0, H), safe_index(h1, H)
+        d0, d1 = safe_index(d0, D), safe_index(d1, D)
 
-        wx = wx.reshape(-1, 1)
-        wy = wy.reshape(-1, 1)
-        wz = wz.reshape(-1, 1)
+        # Perform multilinear interpolation
+        def interpolate(input, t, w, h, d):
+            return input[:, :, d, h, w, t]
 
-        # Access the 8 nearest neighbors in the input tensor
-        indices = torch.clip(B * C * (z0 * H * W + y0 * W + x0)+ torch.arange(len(x), device = input_tensor.device), 0, len(input_flat)-1)
-        indices1 = torch.clip(B * C * (z0 * H * W + y0 * W + x1)+ torch.arange(len(x), device = input_tensor.device), 0, len(input_flat)-1)
-        indices2 = torch.clip(B * C * (z1 * H * W + y0 * W + x0)+ torch.arange(len(x), device = input_tensor.device), 0, len(input_flat)-1)
-        indices3 = torch.clip(B * C * (z1 * H * W + y0 * W + x1)+ torch.arange(len(x), device = input_tensor.device), 0, len(input_flat)-1)
-        indices4 = torch.clip(B * C * (z0 * H * W + y1 * W + x0)+ torch.arange(len(x), device = input_tensor.device), 0, len(input_flat)-1)
-        indices5 = torch.clip(B * C * (z0 * H * W + y1 * W + x1)+ torch.arange(len(x), device = input_tensor.device), 0, len(input_flat)-1)
-        indices6 = torch.clip(B * C * (z1 * H * W + y1 * W + x0)+ torch.arange(len(x), device = input_tensor.device), 0, len(input_flat)-1)
-        indices7 = torch.clip(B * C * (z1 * H * W + y1 * W + x1)+ torch.arange(len(x), device = input_tensor.device), 0, len(input_flat)-1)
+        c00 = interpolate(input, t0, w0, h0, d0)
+        c01 = interpolate(input, t0, w0, h1, d0)
+        c10 = interpolate(input, t0, w1, h0, d0)
+        c11 = interpolate(input, t0, w1, h1, d0)
+        c0 = (1 - w) * c00 + w * c10
+        c1 = (1 - w) * c01 + w * c11
+        c = (1 - h) * c0 + h * c1
 
-        values = input_flat[indices]
-        values1 = input_flat[indices1]
-        values2 = input_flat[indices2]
-        values3 = input_flat[indices3]
-        values4 = input_flat[indices4]
-        values5 = input_flat[indices5]
-        values6 = input_flat[indices6]
-        values7 = input_flat[indices7]
-
-        # Perform bilinear interpolation
-        sampled_values = (
-            values * (1 - wx) * (1 - wy) * (1 - wz) +
-            values1 * wx * (1 - wy) * (1 - wz) +
-            values2 * (1 - wx) * (1 - wy) * wz +
-            values3 * wx * (1 - wy) * wz +
-            values4 * (1 - wx) * wy * (1 - wz) +
-            values5 * wx * wy * (1 - wz) +
-            values6 * (1 - wx) * wy * wz +
-            values7 * wx * wy * wz
-        )
-
-        # Reshape the sampled values back to the original shape
-        sampled_tensor = sampled_values.reshape(B, C, D, H, W)
-
-        return sampled_tensor
+        # Final output
+        output = c.unsqueeze(1)
+        return output
 
     def deform_input(self, inp, deformation):
         _, d_old, h_old, w_old, _ = deformation.shape
@@ -287,8 +268,26 @@ class OcclusionAwareSPADEGenerator(nn.Module):
             deformation = deformation.permute(0, 4, 1, 2, 3)
             deformation = F.interpolate(deformation, size=(d, h, w), mode='trilinear')
             deformation = deformation.permute(0, 2, 3, 4, 1)
-        return F.grid_sample(inp, deformation)
 
+        print(f"Output shape: input:{inp.shape}, grid:{deformation.shape}")
+        # inp: torch.Size([2, 32, 16, 64, 64]), grid: torch.Size([2, 16, 64, 64, 3])
+        # The inner most tensor of the grid (represented by 3) tells us how to fill in missing values (i.e., index or interpolate) into the input tensor.
+        # In other words: grid[2, 16, 64, 64] tells us how to interpolate into inp[2,:,16,64,64]
+
+        # out = Initialized to be copy of inp.
+        # Iterate through batch b of size 2
+            # Iterate over depth d of size 16
+                # Iterate over height h of size 64
+                    # Iterate over width w of size 64
+                        # (x,y,z) coordinate tensors <- retrieved from grid[b, d, h, w]
+                        # (x,y,z) unnormalized <- unnormalized using inp size (2, 32, 16, 64, 64) ? Doc says it should be normalized but reddit says otherwise. Doc is probably more trustworthy.
+                        # out[b, :, d, h, w] = F.interpolate(inp, size=(x,y,z))
+        
+        # TODO: It looks like 4D STILL doesn't work in TensorRT (says input is not equals to 4D even though it is?).
+        # Will have to fall back on implementing grid_sample from scratch.
+        return F.grid_sample(inp, deformation) # self.grid_sample_5d(inp, deformation)
+
+    # TODO: It's very obvious that the bulk of the time overhead is the generator. Will focus on making it more efficient.
     def forward(self, source_image, kp_driving, kp_source):
         # Encoding (downsampling) part
         out = self.first(source_image)
