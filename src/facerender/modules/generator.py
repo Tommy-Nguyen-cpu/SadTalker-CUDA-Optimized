@@ -263,7 +263,7 @@ class OcclusionAwareSPADEGenerator(nn.Module):
 
     def deform_input(self, inp, deformation):
         _, d_old, h_old, w_old, _ = deformation.shape
-        _, _, d, h, w = inp.shape
+        b, _, d, h, w = inp.shape
         if d_old != d or h_old != h or w_old != w:
             deformation = deformation.permute(0, 4, 1, 2, 3)
             deformation = F.interpolate(deformation, size=(d, h, w), mode='trilinear')
@@ -275,10 +275,16 @@ class OcclusionAwareSPADEGenerator(nn.Module):
         # In other words: grid[2, 16, 64, 64] tells us how to interpolate into inp[2,:,16,64,64]
 
         # out = Initialized to be copy of inp.
+        out = inp.detach().clone()
         # Iterate through batch b of size 2
+        for b_idx in range(b):
             # Iterate over depth d of size 16
+            for d_idx in range(d):
                 # Iterate over height h of size 64
+                for h_idx in range(h):
                     # Iterate over width w of size 64
+                    for w_idx in range(w):
+                        coordinate = deformation[b_idx, d_idx, h_idx, w_idx]
                         # (x,y,z) coordinate tensors <- retrieved from grid[b, d, h, w]
                         # (x,y,z) unnormalized <- unnormalized using inp size (2, 32, 16, 64, 64) ? Doc says it should be normalized but reddit says otherwise. Doc is probably more trustworthy.
                         # out[b, :, d, h, w] = F.interpolate(inp, size=(x,y,z))
