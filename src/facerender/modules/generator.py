@@ -276,6 +276,11 @@ class OcclusionAwareSPADEGenerator(nn.Module):
 
         # out = Initialized to be copy of inp.
         out = inp.detach().clone()
+        indices = inp.to_sparse().indices().to(torch.float16)
+        print(f"indices: {torch.max(indices)}")
+        mean = torch.mean(indices)
+        std = torch.std(indices)
+        print(f"mean: {mean}, std: {std}")
         # Iterate through batch b of size 2
         for b_idx in range(b):
             # Iterate over depth d of size 16
@@ -284,10 +289,18 @@ class OcclusionAwareSPADEGenerator(nn.Module):
                 for h_idx in range(h):
                     # Iterate over width w of size 64
                     for w_idx in range(w):
-                        coordinate = deformation[b_idx, d_idx, h_idx, w_idx]
                         # (x,y,z) coordinate tensors <- retrieved from grid[b, d, h, w]
+                        # TODO: Used inp indices tensor as a way of reversing normalized deformation tensor.
+                        # Mean and standard deviation calculated using inp indices, but now its saying its out of bounds. Will have to investigate.
+                        coordinate = deformation[b_idx, d_idx, h_idx, w_idx]
+                        x = abs(coordinate[0] * std) + mean
+                        y = abs(coordinate[1] * std) + mean
+                        z = abs(coordinate[2] * std) + mean
+                        print(f"deformation: {deformation[b_idx, d_idx, h_idx, w_idx]}")
+                        print(f"{x}, {y}, {z}")
+                        # print(f"coordinates: {float(coordinate[0])}, {float(coordinate[1])}, {(float(coordinate[2]))}")
                         # (x,y,z) unnormalized <- unnormalized using inp size (2, 32, 16, 64, 64) ? Doc says it should be normalized but reddit says otherwise. Doc is probably more trustworthy.
-                        # out[b, :, d, h, w] = F.interpolate(inp, size=(x,y,z))
+                        out[b, :, d, h, w] = F.interpolate(inp, size=(int(x),int(y), int(z)))
         
         # TODO: It looks like 4D STILL doesn't work in TensorRT (says input is not equals to 4D even though it is?).
         # Will have to fall back on implementing grid_sample from scratch.
