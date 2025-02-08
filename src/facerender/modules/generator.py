@@ -300,7 +300,7 @@ class OcclusionAwareSPADEGenerator(nn.Module):
                         print(f"{x}, {y}, {z}")
                         # print(f"coordinates: {float(coordinate[0])}, {float(coordinate[1])}, {(float(coordinate[2]))}")
                         # (x,y,z) unnormalized <- unnormalized using inp size (2, 32, 16, 64, 64) ? Doc says it should be normalized but reddit says otherwise. Doc is probably more trustworthy.
-                        out[b, :, d, h, w] = F.interpolate(inp, size=(int(x),int(y), int(z)))
+                        out[b_idx, :, d_idx, h_idx, w_idx] = F.interpolate(inp, size=(int(x),int(y), int(z)))
         
         # TODO: It looks like 4D STILL doesn't work in TensorRT (says input is not equals to 4D even though it is?).
         # Will have to fall back on implementing grid_sample from scratch.
