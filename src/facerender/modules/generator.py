@@ -262,49 +262,74 @@ class OcclusionAwareSPADEGenerator(nn.Module):
         return output
 
     def deform_input(self, inp, deformation):
-        _, d_old, h_old, w_old, _ = deformation.shape
-        b, _, d, h, w = inp.shape
-        if d_old != d or h_old != h or w_old != w:
-            deformation = deformation.permute(0, 4, 1, 2, 3)
-            deformation = F.interpolate(deformation, size=(d, h, w), mode='trilinear')
-            deformation = deformation.permute(0, 2, 3, 4, 1)
+            _, d_old, h_old, w_old, _ = deformation.shape
+            b, _, d, h, w = inp.shape
+            if d_old != d or h_old != h or w_old != w:
+                deformation = deformation.permute(0, 4, 1, 2, 3)
+                deformation = F.interpolate(deformation, size=(d, h, w), mode='trilinear')
+                deformation = deformation.permute(0, 2, 3, 4, 1)
 
-        print(f"Output shape: input:{inp.shape}, grid:{deformation.shape}")
-        # inp: torch.Size([2, 32, 16, 64, 64]), grid: torch.Size([2, 16, 64, 64, 3])
-        # The inner most tensor of the grid (represented by 3) tells us how to fill in missing values (i.e., index or interpolate) into the input tensor.
-        # In other words: grid[2, 16, 64, 64] tells us how to interpolate into inp[2,:,16,64,64]
+            # print(f"Output shape: input:{inp.shape}, grid:{deformation.shape}")
+            # inp: torch.Size([2, 32, 16, 64, 64]), grid: torch.Size([2, 16, 64, 64, 3])
+            # The inner most tensor of the grid (represented by 3) tells us how to fill in missing values (i.e., index or interpolate) into the input tensor.
+            # In other words: grid[2, 16, 64, 64] tells us how to interpolate into inp[2,:,16,64,64]
 
-        # out = Initialized to be copy of inp.
-        out = inp.detach().clone()
-        indices = inp.to_sparse().indices().to(torch.float16)
-        print(f"indices: {torch.max(indices)}")
-        mean = torch.mean(indices)
-        std = torch.std(indices)
-        print(f"mean: {mean}, std: {std}")
-        # Iterate through batch b of size 2
-        for b_idx in range(b):
-            # Iterate over depth d of size 16
-            for d_idx in range(d):
-                # Iterate over height h of size 64
-                for h_idx in range(h):
-                    # Iterate over width w of size 64
-                    for w_idx in range(w):
-                        # (x,y,z) coordinate tensors <- retrieved from grid[b, d, h, w]
-                        # TODO: Used inp indices tensor as a way of reversing normalized deformation tensor.
-                        # Mean and standard deviation calculated using inp indices, but now its saying its out of bounds. Will have to investigate.
-                        coordinate = deformation[b_idx, d_idx, h_idx, w_idx]
-                        x = abs(coordinate[0] * std) + mean
-                        y = abs(coordinate[1] * std) + mean
-                        z = abs(coordinate[2] * std) + mean
-                        print(f"deformation: {deformation[b_idx, d_idx, h_idx, w_idx]}")
-                        print(f"{x}, {y}, {z}")
-                        # print(f"coordinates: {float(coordinate[0])}, {float(coordinate[1])}, {(float(coordinate[2]))}")
-                        # (x,y,z) unnormalized <- unnormalized using inp size (2, 32, 16, 64, 64) ? Doc says it should be normalized but reddit says otherwise. Doc is probably more trustworthy.
-                        out[b_idx, :, d_idx, h_idx, w_idx] = F.interpolate(inp, size=(int(x),int(y), int(z)))
-        
-        # TODO: It looks like 4D STILL doesn't work in TensorRT (says input is not equals to 4D even though it is?).
-        # Will have to fall back on implementing grid_sample from scratch.
-        return F.grid_sample(inp, deformation) # self.grid_sample_5d(inp, deformation)
+            # out = Initialized to be copy of inp.
+            out = inp.detach().clone()
+            indices = inp.to_sparse().indices().to(torch.float64)
+            # print(f"indices: {torch.max(indices)}")
+            mean = torch.mean(indices)
+            std = torch.std(indices)
+            # print(f"mean: {mean}, std: {std}")
+            inp_D = inp.size(2)
+            inp_H = inp.size(3)
+            inp_W = inp.size(4)
+            out_D = deformation.size(1)
+            out_H = deformation.size(2)
+            out_W = deformation.size(3)
+            inp_sN = inp.stride(0)
+            grid_sN = deformation.stride(0)
+            grid_sD = deformation.stride(1)
+            grid_sH = deformation.stride(2)
+            grid_sW = deformation.stride(3)
+            grid_sCoor = deformation.stride(4)
+            # print(f"grid stride: {grid_sN}, {grid_sD}, {grid_sH}, {deformation.stride(4)}, inp stride: {inp_sN}")
+            # Iterate through batch b of size 2
+            for b_idx in range(b):
+                grid_ptr_N = deformation + b_idx * grid_sN
+                inp_ptr_N = inp + b_idx * inp_sN
+                # Iterate over depth d of size 16
+                for d_idx in range(d):
+                    # Iterate over height h of size 64
+                    for h_idx in range(h):
+                        # Iterate over width w of size 64
+                        for w_idx in range(w):
+                            grid_ptr_NDHW = grid_ptr_N + d * grid_sD + h * grid_sH + w * grid_sW
+                            # print(f"scalar: {b_idx * grid_sN + d * grid_sD + h * grid_sH + w * grid_sW}")
+                            # (x,y,z) coordinate tensors <- retrieved from grid[b, d, h, w]
+                            # unnormalizing: ((coord + 1) * size - 1) / 2
+                            coordinate = deformation[b_idx, d_idx, h_idx, w_idx]
+                            # clipping: std::min(static_cast<scalar_t>(clip_limit - 1), std::max(in, static_cast<scalar_t>(0)))
+                            x = int(((coordinate[0] + 1) * inp_W - 1) / 2) # inp_W - math.ceil(abs(coordinate[0] * inp_W))
+                            x = min(inp_W - 1, max(x, 0))
+                            y = int(((coordinate[1] + 1) * inp_H - 1) / 2) # inp_H - math.ceil(abs(coordinate[1] * inp_H))
+                            y = min(inp_H - 1, max(y, 0))
+                            z = int(((coordinate[2] + 1) * inp_D - 1) / 2) # inp_D - math.ceil(abs(coordinate[2] * inp_D))
+                            z = min(inp_D - 1, max(z, 0))
+                            # print(f"deformation: {deformation[b_idx, d_idx, h_idx, w_idx]}")
+                            # print(f"{inp_W}:{x}, {inp_H}:{y}, {inp_D}:{z}")
+                            # print(f"coordinates: {float(coordinate[0])}, {float(coordinate[1])}, {(float(coordinate[2]))}")
+                            # (x,y,z) unnormalized <- unnormalized using inp size (2, 32, 16, 64, 64) ? Doc says it should be normalized but reddit says otherwise. Doc is probably more trustworthy.
+                            # TODO: Results of F.interpolate and out along the the axis ":" is different (out is size 32 while F.interpolate is [2, 32, 35, 35, 35]).
+                            # TODO: Is it just a matter of indexing directly into inp? I don't think so. Perhaps F.interpolate needs to interpolate a different tensor? Will investigate.
+                            # print(F.interpolate(inp, size=(int(x),int(y), int(z))).shape)
+                            # print(out[b_idx, :, d_idx, h_idx, w_idx].shape)
+                            if int(x) < inp_W and int(x) >= 0 and int(y) < inp_H and int(y) >= 0 and int(z) < inp_D and int(z) >= 0:
+                                out[b_idx, :, d_idx, h_idx, w_idx] = inp[b_idx, :, int(z), int(y), int(x)]
+            
+            # TODO: It looks like 4D STILL doesn't work in TensorRT (says input is not equals to 4D even though it is?).
+            # Will have to fall back on implementing grid_sample from scratch.
+            return out # F.grid_sample(inp, deformation) # self.grid_sample_5d(inp, deformation)
 
     # TODO: It's very obvious that the bulk of the time overhead is the generator. Will focus on making it more efficient.
     def forward(self, source_image, kp_driving, kp_source):
