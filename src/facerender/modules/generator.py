@@ -268,19 +268,11 @@ class OcclusionAwareSPADEGenerator(nn.Module):
                 deformation = deformation.permute(0, 4, 1, 2, 3)
                 deformation = F.interpolate(deformation, size=(d, h, w), mode='trilinear')
                 deformation = deformation.permute(0, 2, 3, 4, 1)
-
-            # print(f"Output shape: input:{inp.shape}, grid:{deformation.shape}")
-            # inp: torch.Size([2, 32, 16, 64, 64]), grid: torch.Size([2, 16, 64, 64, 3])
             # The inner most tensor of the grid (represented by 3) tells us how to fill in missing values (i.e., index or interpolate) into the input tensor.
             # In other words: grid[2, 16, 64, 64] tells us how to interpolate into inp[2,:,16,64,64]
 
             # out = Initialized to be copy of inp.
             out = inp.detach().clone()
-            indices = inp.to_sparse().indices().to(torch.float64)
-            # print(f"indices: {torch.max(indices)}")
-            mean = torch.mean(indices)
-            std = torch.std(indices)
-            # print(f"mean: {mean}, std: {std}")
             inp_D = inp.size(2)
             inp_H = inp.size(3)
             inp_W = inp.size(4)
@@ -293,7 +285,6 @@ class OcclusionAwareSPADEGenerator(nn.Module):
             grid_sH = deformation.stride(2)
             grid_sW = deformation.stride(3)
             grid_sCoor = deformation.stride(4)
-            # print(f"grid stride: {grid_sN}, {grid_sD}, {grid_sH}, {deformation.stride(4)}, inp stride: {inp_sN}")
             # Iterate through batch b of size 2
             for b_idx in range(b):
                 grid_ptr_N = deformation + b_idx * grid_sN
@@ -305,7 +296,6 @@ class OcclusionAwareSPADEGenerator(nn.Module):
                         # Iterate over width w of size 64
                         for w_idx in range(w):
                             grid_ptr_NDHW = grid_ptr_N + d * grid_sD + h * grid_sH + w * grid_sW
-                            # print(f"scalar: {b_idx * grid_sN + d * grid_sD + h * grid_sH + w * grid_sW}")
                             # (x,y,z) coordinate tensors <- retrieved from grid[b, d, h, w]
                             # unnormalizing: ((coord + 1) * size - 1) / 2
                             coordinate = deformation[b_idx, d_idx, h_idx, w_idx]
@@ -319,16 +309,10 @@ class OcclusionAwareSPADEGenerator(nn.Module):
                             # print(f"deformation: {deformation[b_idx, d_idx, h_idx, w_idx]}")
                             # print(f"{inp_W}:{x}, {inp_H}:{y}, {inp_D}:{z}")
                             # print(f"coordinates: {float(coordinate[0])}, {float(coordinate[1])}, {(float(coordinate[2]))}")
-                            # (x,y,z) unnormalized <- unnormalized using inp size (2, 32, 16, 64, 64) ? Doc says it should be normalized but reddit says otherwise. Doc is probably more trustworthy.
-                            # TODO: Results of F.interpolate and out along the the axis ":" is different (out is size 32 while F.interpolate is [2, 32, 35, 35, 35]).
-                            # TODO: Is it just a matter of indexing directly into inp? I don't think so. Perhaps F.interpolate needs to interpolate a different tensor? Will investigate.
-                            # print(F.interpolate(inp, size=(int(x),int(y), int(z))).shape)
-                            # print(out[b_idx, :, d_idx, h_idx, w_idx].shape)
+                            # (x,y,z) unnormalized <- unnormalized using inp size (2, 32, 16, 64, 64)
                             if int(x) < inp_W and int(x) >= 0 and int(y) < inp_H and int(y) >= 0 and int(z) < inp_D and int(z) >= 0:
                                 out[b_idx, :, d_idx, h_idx, w_idx] = inp[b_idx, :, int(z), int(y), int(x)]
             
-            # TODO: It looks like 4D STILL doesn't work in TensorRT (says input is not equals to 4D even though it is?).
-            # Will have to fall back on implementing grid_sample from scratch.
             return out # F.grid_sample(inp, deformation) # self.grid_sample_5d(inp, deformation)
 
     # TODO: It's very obvious that the bulk of the time overhead is the generator. Will focus on making it more efficient.
