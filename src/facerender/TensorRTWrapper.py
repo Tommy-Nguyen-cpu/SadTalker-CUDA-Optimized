@@ -43,31 +43,65 @@ class TensorRTWrapper():
         self.engine = self.runtime.deserialize_cuda_engine(engine_data) # Converts bytes/ints back into ICudaEngine.
         self.context = self.engine.create_execution_context() # Context used for inference. Might be worth exploring having multiple contexts so multiple batches can be inferred simultaneously.
 
-    def __call__(self, input, outputs, device = "cuda"):
-        input = torch.from_numpy(input).to(device)
-        stream = torch.cuda.Stream() # Initialize CUDA data stream.
-        d_input = input.data_ptr() # Grab the memory address of the input.
+        tensor_names = [self.engine.get_tensor_name(i)
+                for i in range(self.engine.num_io_tensors)]
+        print(f">>> {file_path} valid I/O tensor names:", tensor_names)
+        for i in range(self.engine.num_io_tensors):
+            name = self.engine.get_tensor_name(i)
+            shape = tuple(self.engine.get_tensor_shape(name))
+            print(f"{i:2d} {name:20s} {shape}")
+
+    def __call__(self, input, outputs, device="cuda"):
+        # --- prepare inputs ---
+        stream = torch.cuda.Stream()
+
+        # keep references so tensors aren't freed
+        input_tensors = []
+        d_inputs = []
         
-        if type(outputs) is list:
-            outputs = [torch.from_numpy(output).to(device) for output in outputs]
-            d_outputs = [output.data_ptr() for output in outputs] # Allocates memory in GPU for output data.
+        # support list, dict, or single
+        if isinstance(input, list):
+            items = input
         else:
-            outputs = torch.from_numpy(outputs).to(device)
-            d_outputs = outputs.data_ptr()
+            items = [input]
 
-        tensor_names = [self.engine.get_tensor_name(i) for i in range(self.engine.num_io_tensors)] # Grabs the name of the input/output tensors.
-        
-        self.context.set_tensor_address(tensor_names[0], int(d_input)) # Sets where in the GPU memory the input tensor will be stored and used.
+        for inp in items:
+            t_inp = torch.from_numpy(inp).to(device)
+            input_tensors.append(t_inp)
+            d_inputs.append(int(t_inp.data_ptr()))
 
-        if type(outputs) is list:
-            [self.context.set_tensor_address(tensor_names[i], int(d_outputs[i-1])) for i in range(1, len(tensor_names))] # Sets in the GPU memory where the output tensor will be stored and used.
+        # --- prepare outputs ---
+        output_tensors = []
+        d_outputs = []
+        if isinstance(outputs, list):
+            outs = outputs
         else:
-            self.context.set_tensor_address(tensor_names[1], int(d_outputs))
+            outs = [outputs]
 
+        for out in outs:
+            t_out = torch.from_numpy(out).to(device)
+            output_tensors.append(t_out)
+            d_outputs.append(int(t_out.data_ptr()))
+
+        # fetch binding names
+        tensor_names = [self.engine.get_tensor_name(i)
+                        for i in range(self.engine.num_io_tensors)]
+
+        # --- bind inputs ---
+        next_pos = 0
+        for ptr in d_inputs:
+            self.context.set_tensor_address(tensor_names[next_pos], ptr)
+            next_pos += 1
+
+        # --- bind outputs ---
+        for ptr in d_outputs:
+            self.context.set_tensor_address(tensor_names[next_pos], ptr)
+            next_pos += 1
+
+        # --- run ---
         self.context.execute_async_v3(stream.cuda_stream)
+        stream.synchronize()
 
-        stream.synchronize() # Waits for all activity on the stream to finish before continuing on in the method.
-
-        if type(outputs) is list:
-            return [output.cpu() for output in outputs]
-        return outputs.cpu()
+        # --- return ---
+        results = [t.cpu() for t in output_tensors]
+        return results if len(results) > 1 else results[0]

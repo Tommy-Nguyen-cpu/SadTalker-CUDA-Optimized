@@ -3,6 +3,11 @@ from torch import nn
 import torch.nn.functional as F
 from src.facerender.modules.util import ResBlock2d, SameBlock2d, UpBlock2d, DownBlock2d, ResBlock3d, SPADEResnetBlock
 from src.facerender.modules.dense_motion import DenseMotionNetwork
+from src.utils.pytorch_replacements import trilinear_sampler
+import math
+import sys
+sys.path.append("..")
+from CSharpGridSample.invoker import GridSampler
 
 
 class OcclusionAwareGenerator(nn.Module):
@@ -65,7 +70,7 @@ class OcclusionAwareGenerator(nn.Module):
             deformation = deformation.permute(0, 4, 1, 2, 3)
             deformation = F.interpolate(deformation, size=(d, h, w), mode='trilinear')
             deformation = deformation.permute(0, 2, 3, 4, 1)
-        return F.grid_sample(inp, deformation)
+        return trilinear_sampler(inp, deformation)
 
     def forward(self, source_image, kp_driving, kp_source):
         # Encoding (downsampling) part
@@ -114,7 +119,9 @@ class OcclusionAwareGenerator(nn.Module):
 
         output_dict["prediction"] = out
 
-        return output_dict
+        print(f"output shape: {out.shape}")
+
+        return out
 
 
 class SPADEDecoder(nn.Module):
@@ -198,124 +205,72 @@ class OcclusionAwareSPADEGenerator(nn.Module):
 
         self.decoder = SPADEDecoder()
 
-    def grid_sample_5d(self, input, grid, mode='linear', padding_mode='zeros', align_corners=True):
-        """
-        Custom implementation of 5D grid sampling.
+        # self.sampler = GridSampler("../CSharpGridSample/GridSample/GridSample/bin/Debug/net7.0/GridSample.exe")
+        # self.handler = self.sampler.start_process()
 
-        Args:
-            input (torch.Tensor): Input tensor of shape (N, C, D, H, W, T).
-            grid (torch.Tensor): Sampling grid of shape (N, D_out, H_out, W_out, T_out, 5).
-            mode (str): Interpolation mode ('linear' for multilinear).
-            padding_mode (str): Padding mode ('zeros', 'border', or 'reflection').
-            align_corners (bool): Align corners flag for coordinate normalization.
+    # Example usage:
+    # x:     [N, C, H, W]
+    # grid:  [N, H_out, W
 
-        Returns:
-            torch.Tensor: Output tensor of shape (N, C, D_out, H_out, W_out, T_out).
-        """
-        C, D, H, W, T = input.shape
-        D_out, H_out, W_out, T_out, _ = grid.shape
-
-        # Normalize grid to match the input dimensions
-        def normalize(coords, size):
-            if align_corners:
-                return (coords + 1) * (size - 1) / 2
-            else:
-                return ((coords + 1) * size - 1) / 2
-
-        # Normalize grid coordinates
-        grid = torch.stack([normalize(grid[..., i], size)
-                            for i, size in enumerate([T, W, H, D, C])], dim=-1)
-
-        # Extract grid coordinates
-        t, w, h, d, c = [grid[..., i] for i in range(5)]
-
-        # Clamp coordinates within bounds
-        t0, t1 = t.floor().long(), t.ceil().long()
-        w0, w1 = w.floor().long(), w.ceil().long()
-        h0, h1 = h.floor().long(), h.ceil().long()
-        d0, d1 = d.floor().long(), d.ceil().long()
-        c0, c1 = c.floor().long(), c.ceil().long()
-
-        # Ensure coordinates stay within valid range
-        def safe_index(x, max_size):
-            return torch.clamp(x, 0, max_size - 1)
-
-        t0, t1 = safe_index(t0, T), safe_index(t1, T)
-        w0, w1 = safe_index(w0, W), safe_index(w1, W)
-        h0, h1 = safe_index(h0, H), safe_index(h1, H)
-        d0, d1 = safe_index(d0, D), safe_index(d1, D)
-
-        # Perform multilinear interpolation
-        def interpolate(input, t, w, h, d):
-            return input[:, :, d, h, w, t]
-
-        c00 = interpolate(input, t0, w0, h0, d0)
-        c01 = interpolate(input, t0, w0, h1, d0)
-        c10 = interpolate(input, t0, w1, h0, d0)
-        c11 = interpolate(input, t0, w1, h1, d0)
-        c0 = (1 - w) * c00 + w * c10
-        c1 = (1 - w) * c01 + w * c11
-        c = (1 - h) * c0 + h * c1
-
-        # Final output
-        output = c.unsqueeze(1)
-        return output
-
+    # TODO: It works! But it's very slow. Plus, the results have some parts of the facing moving cartoonishly. We might want to try implementing "bilinear" and in a different language (like C#) and use it here.
     def deform_input(self, inp, deformation):
-            _, d_old, h_old, w_old, _ = deformation.shape
-            b, _, d, h, w = inp.shape
-            if d_old != d or h_old != h or w_old != w:
-                deformation = deformation.permute(0, 4, 1, 2, 3)
-                deformation = F.interpolate(deformation, size=(d, h, w), mode='trilinear')
-                deformation = deformation.permute(0, 2, 3, 4, 1)
-            # The inner most tensor of the grid (represented by 3) tells us how to fill in missing values (i.e., index or interpolate) into the input tensor.
-            # In other words: grid[2, 16, 64, 64] tells us how to interpolate into inp[2,:,16,64,64]
+        _, d_old, h_old, w_old, _ = deformation.shape
+        b, _, d, h, w = inp.shape
+        if d_old != d or h_old != h or w_old != w:
+            deformation = deformation.permute(0, 4, 1, 2, 3)
+            deformation = F.interpolate(deformation, size=(d, h, w), mode='trilinear')
+            deformation = deformation.permute(0, 2, 3, 4, 1)
 
-            # out = Initialized to be copy of inp.
-            out = inp.detach().clone()
-            inp_D = inp.size(2)
-            inp_H = inp.size(3)
-            inp_W = inp.size(4)
-            out_D = deformation.size(1)
-            out_H = deformation.size(2)
-            out_W = deformation.size(3)
-            inp_sN = inp.stride(0)
-            grid_sN = deformation.stride(0)
-            grid_sD = deformation.stride(1)
-            grid_sH = deformation.stride(2)
-            grid_sW = deformation.stride(3)
-            grid_sCoor = deformation.stride(4)
-            # Iterate through batch b of size 2
-            for b_idx in range(b):
-                grid_ptr_N = deformation + b_idx * grid_sN
-                inp_ptr_N = inp + b_idx * inp_sN
-                # Iterate over depth d of size 16
-                for d_idx in range(d):
-                    # Iterate over height h of size 64
-                    for h_idx in range(h):
-                        # Iterate over width w of size 64
-                        for w_idx in range(w):
-                            grid_ptr_NDHW = grid_ptr_N + d * grid_sD + h * grid_sH + w * grid_sW
-                            # (x,y,z) coordinate tensors <- retrieved from grid[b, d, h, w]
-                            # unnormalizing: ((coord + 1) * size - 1) / 2
-                            coordinate = deformation[b_idx, d_idx, h_idx, w_idx]
-                            # clipping: std::min(static_cast<scalar_t>(clip_limit - 1), std::max(in, static_cast<scalar_t>(0)))
-                            x = int(((coordinate[0] + 1) * inp_W - 1) / 2) # inp_W - math.ceil(abs(coordinate[0] * inp_W))
-                            x = min(inp_W - 1, max(x, 0))
-                            y = int(((coordinate[1] + 1) * inp_H - 1) / 2) # inp_H - math.ceil(abs(coordinate[1] * inp_H))
-                            y = min(inp_H - 1, max(y, 0))
-                            z = int(((coordinate[2] + 1) * inp_D - 1) / 2) # inp_D - math.ceil(abs(coordinate[2] * inp_D))
-                            z = min(inp_D - 1, max(z, 0))
-                            # print(f"deformation: {deformation[b_idx, d_idx, h_idx, w_idx]}")
-                            # print(f"{inp_W}:{x}, {inp_H}:{y}, {inp_D}:{z}")
-                            # print(f"coordinates: {float(coordinate[0])}, {float(coordinate[1])}, {(float(coordinate[2]))}")
-                            # (x,y,z) unnormalized <- unnormalized using inp size (2, 32, 16, 64, 64)
-                            if int(x) < inp_W and int(x) >= 0 and int(y) < inp_H and int(y) >= 0 and int(z) < inp_D and int(z) >= 0:
-                                out[b_idx, :, d_idx, h_idx, w_idx] = inp[b_idx, :, int(z), int(y), int(x)]
-            
-            return out # F.grid_sample(inp, deformation) # self.grid_sample_5d(inp, deformation)
+        # inp: torch.Size([2, 32, 16, 64, 64]), grid: torch.Size([2, 16, 64, 64, 3])
+        # The inner most tensor of the grid (represented by 3) tells us how to fill in missing values (i.e., index or interpolate) into the input tensor.
+        # In other words: grid[2, 16, 64, 64] tells us how to interpolate into inp[2,:,16,64,64]
+        # self.sampler.send_array(self.handler, inp.cpu().numpy(), deformation.cpu().numpy())
 
-    # TODO: It's very obvious that the bulk of the time overhead is the generator. Will focus on making it more efficient.
+        # return torch.tensor(self.sampler.receive_array(self.handler)["Output"]).half().to("cuda:0")
+
+        # out = Initialized to be copy of inp.
+        # out = inp.detach().clone()
+        # inp_D = inp.size(2)
+        # inp_H = inp.size(3)
+        # inp_W = inp.size(4)
+        # out_D = deformation.size(1)
+        # out_H = deformation.size(2)
+        # out_W = deformation.size(3)
+        # inp_sN = inp.stride(0)
+        # grid_sN = deformation.stride(0)
+        # grid_sD = deformation.stride(1)
+        # grid_sH = deformation.stride(2)
+        # grid_sW = deformation.stride(3)
+        # grid_sCoor = deformation.stride(4)
+        # # Iterate through batch b of size 2
+        # for b_idx in range(b):
+        #     grid_ptr_N = deformation + b_idx * grid_sN
+        #     inp_ptr_N = inp + b_idx * inp_sN
+        #     # Iterate over depth d of size 16
+        #     for d_idx in range(d):
+        #         # Iterate over height h of size 64
+        #         for h_idx in range(h):
+        #             # Iterate over width w of size 64
+        #             for w_idx in range(w):
+        #                 grid_ptr_NDHW = grid_ptr_N + d * grid_sD + h * grid_sH + w * grid_sW
+        #                 # (x,y,z) coordinate tensors <- retrieved from grid[b, d, h, w]
+        #                 # unnormalizing: ((coord + 1) * size - 1) / 2
+        #                 coordinate = deformation[b_idx, d_idx, h_idx, w_idx]
+        #                 # clipping: std::min(static_cast<scalar_t>(clip_limit - 1), std::max(in, static_cast<scalar_t>(0)))
+        #                 x = int(((coordinate[0] + 1) * inp_W - 1) / 2) # inp_W - math.ceil(abs(coordinate[0] * inp_W))
+        #                 x = min(inp_W - 1, max(x, 0))
+        #                 y = int(((coordinate[1] + 1) * inp_H - 1) / 2) # inp_H - math.ceil(abs(coordinate[1] * inp_H))
+        #                 y = min(inp_H - 1, max(y, 0))
+        #                 z = int(((coordinate[2] + 1) * inp_D - 1) / 2) # inp_D - math.ceil(abs(coordinate[2] * inp_D))
+        #                 z = min(inp_D - 1, max(z, 0))
+        #                 # (x,y,z) unnormalized <- unnormalized using inp size (2, 32, 16, 64, 64)
+        #                 if int(x) < inp_W and int(x) >= 0 and int(y) < inp_H and int(y) >= 0 and int(z) < inp_D and int(z) >= 0:
+        #                     out[b_idx, :, d_idx, h_idx, w_idx] = inp[b_idx, :, int(z), int(y), int(x)]
+        
+        return trilinear_sampler(inp, deformation) # F.grid_sample(inp, deformation) # self.grid_sample_5d(inp, deformation)
+
+    # TODO: Still needs some work. The result is worse than the python version, likely because of the if-block in the c# code.
+    # TODO: We also want to increase the efficiency if possible. It's currently really slow (much faster than Python code, but much slower than c++ code).
     def forward(self, source_image, kp_driving, kp_source):
         # Encoding (downsampling) part
         out = self.first(source_image)
@@ -360,5 +315,7 @@ class OcclusionAwareSPADEGenerator(nn.Module):
         out = self.decoder(out)
 
         output_dict["prediction"] = out
+
+        print(f"Output shape: {out.shape}")
         
-        return output_dict
+        return out

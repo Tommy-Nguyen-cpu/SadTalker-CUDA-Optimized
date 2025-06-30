@@ -15,7 +15,7 @@ import torchvision
 
 
 from src.facerender.modules.keypoint_detector import HEEstimator, KPDetector
-from src.facerender.modules.mapping import MappingNet
+from src.facerender.modules.mapping import MappingNet, MappingTensorRT
 from src.facerender.modules.generator import OcclusionAwareGenerator, OcclusionAwareSPADEGenerator
 from src.facerender.modules.make_animation import make_animation 
 
@@ -39,8 +39,8 @@ class AnimateFromCoeff():
         with open(sadtalker_path['facerender_yaml']) as f:
             config = yaml.safe_load(f)
 
-        generator = OcclusionAwareSPADEGenerator(**config['model_params']['generator_params'],
-                                                    **config['model_params']['common_params'])
+        generator = TensorRTWrapper()
+        generator.load_engine("../scripts/generator_new.engine")
         # kp_extractor = KPDetector(**config['model_params']['kp_detector_params'],
         #                             **config['model_params']['common_params'])
         kp_extractor = TensorRTWrapper()
@@ -71,20 +71,20 @@ class AnimateFromCoeff():
         # engine = builder.build_cuda_engine(network)
         he_estimator = HEEstimator(**config['model_params']['he_estimator_params'],
                                **config['model_params']['common_params'])
-        mapping = MappingNet(**config['model_params']['mapping_params'])
+        mapping = MappingTensorRT("../scripts/mapping.engine")# MappingNet(**config['model_params']['mapping_params'])
 
-        generator.to(device)
+        # generator.to(device)
         # kp_extractor.to(device)
         he_estimator.to(device)
-        mapping.to(device)
-        for param in generator.parameters():
-            param.requires_grad = False
+        # mapping.to(device)
+        # for param in generator.parameters():
+        #     param.requires_grad = False
         # for param in kp_extractor.parameters():
         #     param.requires_grad = False 
         for param in he_estimator.parameters():
             param.requires_grad = False
-        for param in mapping.parameters():
-            param.requires_grad = False
+        # for param in mapping.parameters():
+        #     param.requires_grad = False
 
         if sadtalker_path is not None:
             if 'checkpoint' in sadtalker_path: # use safe tensor
@@ -94,10 +94,10 @@ class AnimateFromCoeff():
         else:
             raise AttributeError("Checkpoint should be specified for video head pose estimator.")
 
-        if  sadtalker_path['mappingnet_checkpoint'] is not None:
-            self.load_cpk_mapping(sadtalker_path['mappingnet_checkpoint'], mapping=mapping)
-        else:
-            raise AttributeError("Checkpoint should be specified for video head pose estimator.") 
+        # if  sadtalker_path['mappingnet_checkpoint'] is not None:
+        #     self.load_cpk_mapping(sadtalker_path['mappingnet_checkpoint'], mapping=mapping)
+        # else:
+        #     raise AttributeError("Checkpoint should be specified for video head pose estimator.") 
 
         self.kp_extractor = kp_extractor
         self.generator = generator
@@ -105,9 +105,9 @@ class AnimateFromCoeff():
         self.mapping = mapping
 
         # self.kp_extractor.eval()
-        self.generator.eval()
+        # self.generator.eval()
         self.he_estimator.eval()
-        self.mapping.eval()
+        # self.mapping.eval()
          
         self.device = device
         self.half = half
@@ -118,12 +118,12 @@ class AnimateFromCoeff():
 
         checkpoint = safetensors.torch.load_file(checkpoint_path)
 
-        if generator is not None:
-            x_generator = {}
-            for k,v in checkpoint.items():
-                if 'generator' in k:
-                    x_generator[k.replace('generator.', '')] = v
-            generator.load_state_dict(x_generator)
+        # if generator is not None:
+        #     x_generator = {}
+        #     for k,v in checkpoint.items():
+        #         if 'generator' in k:
+        #             x_generator[k.replace('generator.', '')] = v
+        #     generator.load_state_dict(x_generator)
         # if kp_detector is not None:
         #     x_generator = {}
         #     for k,v in checkpoint.items():
@@ -144,8 +144,8 @@ class AnimateFromCoeff():
                         optimizer_discriminator=None, optimizer_kp_detector=None, 
                         optimizer_he_estimator=None, device="cpu"):
         checkpoint = torch.load(checkpoint_path, map_location=torch.device(device))
-        if generator is not None:
-            generator.load_state_dict(checkpoint['generator'])
+        # if generator is not None:
+        #     generator.load_state_dict(checkpoint['generator'])
         # if kp_detector is not None:
         #     kp_detector.load_state_dict(checkpoint['kp_detector'])
         if he_estimator is not None:

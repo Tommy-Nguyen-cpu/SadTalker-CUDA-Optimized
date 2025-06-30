@@ -99,14 +99,15 @@ def keypoint_transformation(kp_canonical, he, wo_exp=False):
     return {'value': kp_transformed}
 
 
-
+# TODO: Okay, so I found a workaround that would allow me to convert the generator to tensorrt, but the model now outputs a black screen.
+# TODO: This is likely due to some issue with tensorrt/the format of the data. Will have to dig into it.
 def make_animation(source_image, source_semantics, target_semantics,
                             generator, kp_detector, he_estimator, mapping, 
                             yaw_c_seq=None, pitch_c_seq=None, roll_c_seq=None,
                             use_exp=True, use_half=False):
     with torch.no_grad():
         predictions = []
-        generator = generator.half() if use_half else generator
+        # generator = generator.half() if use_half else generator
 
         start = time()
         kp_canonical = np.empty((4, 15, 3), dtype = np.float32)
@@ -121,11 +122,12 @@ def make_animation(source_image, source_semantics, target_semantics,
         he_source = mapping(source_semantics)
         kp_source = keypoint_transformation(kp_canonical, he_source)
         # torch.onnx.export(mapping, args={"input_3dmm" : source_semantics}, f="../scripts/mapping.onnx", export_params=True, opset_version=20)
-        print(f"yaw: {he_source['yaw']}\n pitch: {he_source['pitch']}\n roll: {he_source['roll']}\n t: {he_source['t']}\n exp: {he_source['exp']}")
+        # print(f"yaw: {he_source['yaw']}\n pitch: {he_source['pitch']}\n roll: {he_source['roll']}\n t: {he_source['t']}\n exp: {he_source['exp']}")
         print(f"Mapping took: {time() - start}")
         print(f"source semantic shape: {source_semantics.shape}")
         # print(f"Mapping output shape: {he_source.shape}")
-    
+
+        print(f"Running grid sample {target_semantics.shape[1]} times!")
         for frame_idx in tqdm(range(target_semantics.shape[1]), 'Face Renderer:'):
             # still check the dimension
             # print(target_semantics.shape, source_semantics.shape)
@@ -147,10 +149,18 @@ def make_animation(source_image, source_semantics, target_semantics,
                 kp_norm = {k: v.half() for k, v in kp_norm.items()}
             
             start = time()
-            out = generator(source_image, kp_source=kp_source, kp_driving=kp_norm)
+            out = np.zeros(source_image.shape, dtype = np.float16)
+            print(f"output: {out.shape}")
+            print(f"source image: {source_image.shape}")
+            print(f"kp_source: {kp_source['value'].shape}")
+            print(f"kp_norm: {kp_norm['value'].shape}")
+            generator_input = [source_image.cpu().numpy().astype(np.float16), kp_source['value'].cpu().numpy().astype(np.float16), kp_norm['value'].cpu().numpy().astype(np.float16)]
+            out = generator(generator_input, out)
+            
+            # out = generator(source_image, kp_source['value'], kp_norm['value'])
             # if frame_idx == 0:
             #     print(f"Input shape: {source_image.shape}")
-            #     torch.onnx.export(generator, args={"source_image" : source_image, "kp_source" : kp_source, "kp_driving" : kp_norm}, f="generator_new.onnx", export_params=True, opset_version=20)
+            #     torch.onnx.export(generator, args={"source_image" : source_image, "kp_source" : kp_source['value'], "kp_driving" : kp_norm['value']}, f="../scripts/no_sample_grid_generator.onnx", export_params=True, opset_version=20)
 
             # print(f"Generator took: {time() - start}")
             # torch.onnx.export(generator, args={"source_image" : source_image, "kp_source" : kp_source, "kp_driving" : kp_norm}, f="face_render.onnx", export_params=True, opset_version=20)
@@ -165,7 +175,9 @@ def make_animation(source_image, source_semantics, target_semantics,
             kp_driving_new = keypoint_transformation(kp_canonical_new, he_driving, wo_exp=True)
             out = generator(source_image_new, kp_source=kp_source_new, kp_driving=kp_driving_new)
             '''
-            predictions.append(out['prediction'])
+            predictions.append(out)
+            # print(f"out: {out}")
+            # print(f"out len: {len(out)}")
         predictions_ts =  torch.stack(predictions, dim=1)
     return predictions_ts
 
