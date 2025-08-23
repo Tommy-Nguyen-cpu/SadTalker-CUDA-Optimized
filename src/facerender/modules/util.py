@@ -1,6 +1,7 @@
 from torch import nn
 
 import torch.nn.functional as F
+from torch.nn.modules.batchnorm import _BatchNorm
 import torch
 
 from src.facerender.sync_batchnorm import SynchronizedBatchNorm2d as BatchNorm2d
@@ -138,8 +139,8 @@ class ResBlock3d(nn.Module):
                                padding=padding)
         self.conv2 = nn.Conv3d(in_channels=in_features, out_channels=in_features, kernel_size=kernel_size,
                                padding=padding)
-        self.norm1 = BatchNorm3d(in_features, affine=True)
-        self.norm2 = BatchNorm3d(in_features, affine=True)
+        self.norm1 = BatchNorm3d(in_features, affine=True).to("cuda:0")
+        self.norm2 = BatchNorm3d(in_features, affine=True).to("cuda:0")
 
     def forward(self, x):
         out = self.norm1(x)
@@ -181,7 +182,7 @@ class UpBlock3d(nn.Module):
 
         self.conv = nn.Conv3d(in_channels=in_features, out_channels=out_features, kernel_size=kernel_size,
                               padding=padding, groups=groups)
-        self.norm = BatchNorm3d(out_features, affine=True)
+        self.norm = BatchNorm3d(out_features, affine=True).to("cuda:0")
 
     def forward(self, x):
         # out = F.interpolate(x, scale_factor=(1, 2, 2), mode='trilinear')
@@ -201,7 +202,7 @@ class DownBlock2d(nn.Module):
         super(DownBlock2d, self).__init__()
         self.conv = nn.Conv2d(in_channels=in_features, out_channels=out_features, kernel_size=kernel_size,
                               padding=padding, groups=groups)
-        self.norm = BatchNorm2d(out_features, affine=True)
+        self.norm = BatchNorm2d(out_features, affine=True).to("cuda:0")
         self.pool = nn.AvgPool2d(kernel_size=(2, 2))
 
     def forward(self, x):
@@ -225,7 +226,7 @@ class DownBlock3d(nn.Module):
         '''
         self.conv = nn.Conv3d(in_channels=in_features, out_channels=out_features, kernel_size=kernel_size,
                               padding=padding, groups=groups)
-        self.norm = BatchNorm3d(out_features, affine=True)
+        self.norm = BatchNorm3d(out_features, affine=True).to("cuda:0")
         self.pool = nn.AvgPool3d(kernel_size=(1, 2, 2))
 
     def forward(self, x):
@@ -245,7 +246,7 @@ class SameBlock2d(nn.Module):
         super(SameBlock2d, self).__init__()
         self.conv = nn.Conv2d(in_channels=in_features, out_channels=out_features,
                               kernel_size=kernel_size, padding=padding, groups=groups)
-        self.norm = BatchNorm2d(out_features, affine=True)
+        self.norm = BatchNorm2d(out_features, affine=True).to("cuda:0")
         if lrelu:
             self.ac = nn.LeakyReLU()
         else:
@@ -300,7 +301,7 @@ class Decoder(nn.Module):
         self.out_filters = block_expansion + in_features
 
         self.conv = nn.Conv3d(in_channels=self.out_filters, out_channels=self.out_filters, kernel_size=3, padding=1)
-        self.norm = BatchNorm3d(self.out_filters, affine=True)
+        self.norm = BatchNorm3d(self.out_filters, affine=True).to("cuda:0")
 
     def forward(self, x):
         out = x.pop()
@@ -416,12 +417,21 @@ class AntiAliasInterpolation2d(nn.Module):
 
         return out
 
+class InstanceNormAlternative(nn.InstanceNorm2d):
+    def forward(self, input):
+        self._check_input_dim(input)
 
+        desc = 1 / (input.var(axis=[2, 3], keepdim=True, unbiased=False) + self.eps) ** 0.5
+        retval = (input - input.mean(axis=[2, 3], keepdim=True)) * desc
+        return retval
+
+# TODO: I think I was able to narrow down where the issue might be caused. After creating the InstanceNorm2D alternative, the face is more consistent, but there is this strange
+# Almost metallic color over the video, and the mouth/jaw no longer moves. The issue most likely is caused by the SPADE class.
 class SPADE(nn.Module):
     def __init__(self, norm_nc, label_nc):
         super().__init__()
 
-        self.param_free_norm = nn.InstanceNorm2d(norm_nc, affine=False)
+        self.param_free_norm = InstanceNormAlternative(norm_nc, affine=False) # nn.InstanceNorm2d(norm_nc, affine=False)
         nhidden = 128
 
         self.mlp_shared = nn.Sequential(
