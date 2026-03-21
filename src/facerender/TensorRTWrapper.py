@@ -11,7 +11,9 @@ class TensorRTWrapper():
 
     def create_engine(self, max_workspace_size=1<<30, onnx_file_path = '../SadTalker/kp_detector.onnx'):
         # Creates a computational graph that will be used by our builder to make our engine. Think of this like a blueprint for our network.
-        self.network = self.builder.create_network() # We are telling the network that programmers can explicitly state the type of every tensor and the input and output.
+        # self.network = self.builder.create_network() # We are telling the network that programmers can explicitly state the type of every tensor and the input and output.
+        EXPLICIT_BATCH = 1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+        self.network = self.builder.create_network(EXPLICIT_BATCH)
 
         self.parser = trt.OnnxParser(self.network, self.LOGGER) # Used to parse info from our ONNX file.
 
@@ -25,7 +27,7 @@ class TensorRTWrapper():
         # Configure settings for builder so that it knows how we want it to setup the engine.
         self.config = self.builder.create_builder_config()
         self.config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, max_workspace_size) # Sets the memory size of our workspace so it doesn't exceed it.
-        self.config.set_flag(trt.BuilderFlag.FP16) # Use FP16 if GPU supports it.
+        self.config.set_flag(trt.BuilderFlag.FP32) # Use FP16 if GPU supports it.
 
         engine_memory_data = self.builder.build_serialized_network(self.network, self.config) # Build our engine based on our computational graph and engine configuration settings.
         self.engine = self.runtime.deserialize_cuda_engine(engine_memory_data)
@@ -66,9 +68,10 @@ class TensorRTWrapper():
             items = [input]
 
         for inp in items:
-            t_inp = torch.from_numpy(inp).to(device)
-            input_tensors.append(t_inp)
-            d_inputs.append(int(t_inp.data_ptr()))
+            if inp is not None:
+                t_inp = torch.from_numpy(inp).to(device)
+                input_tensors.append(t_inp)
+                d_inputs.append(int(t_inp.data_ptr()))
 
         # --- prepare outputs ---
         output_tensors = []
@@ -87,16 +90,18 @@ class TensorRTWrapper():
         tensor_names = [self.engine.get_tensor_name(i)
                         for i in range(self.engine.num_io_tensors)]
 
-        # --- bind inputs ---
-        next_pos = 0
-        for ptr in d_inputs:
-            self.context.set_tensor_address(tensor_names[next_pos], ptr)
-            next_pos += 1
+        input_idx = 0
+        output_idx = 0
 
-        # --- bind outputs ---
-        for ptr in d_outputs:
-            self.context.set_tensor_address(tensor_names[next_pos], ptr)
-            next_pos += 1
+        for name in tensor_names:
+            mode = self.engine.get_tensor_mode(name)
+
+            if mode == trt.TensorIOMode.INPUT:
+                self.context.set_tensor_address(name, d_inputs[input_idx])
+                input_idx += 1
+            else:
+                self.context.set_tensor_address(name, d_outputs[output_idx])
+                output_idx += 1
 
         # --- run ---
         self.context.execute_async_v3(stream.cuda_stream)
