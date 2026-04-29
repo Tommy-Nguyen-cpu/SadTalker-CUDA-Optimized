@@ -9,19 +9,12 @@ def trilinear_sampler(
     """
     input_vol: (N, C, D, H, W)
     grid:      (N, D_out, H_out, W_out, 3), coords in [-1, 1]
-    returns:   (N, C, D_out, H_out, W_out)
-
-    This is a manual trilinear sampler intended to match torch.nn.functional.grid_sample
-    as closely as possible for 5D input.
     """
-
-    if padding_mode not in ("zeros", "border"):
-        raise ValueError("padding_mode must be 'zeros' or 'border'")
 
     N, C, D, H, W = input_vol.shape
     _, D_out, H_out, W_out, _ = grid.shape
 
-    # Match grid_sample coordinate transform
+    # --- coordinate transform ---
     if align_corners:
         x = (grid[..., 0] + 1) * (W - 1) / 2
         y = (grid[..., 1] + 1) * (H - 1) / 2
@@ -31,7 +24,6 @@ def trilinear_sampler(
         y = ((grid[..., 1] + 1) * H - 1) / 2
         z = ((grid[..., 2] + 1) * D - 1) / 2
 
-    # Base corners
     x0 = torch.floor(x)
     y0 = torch.floor(y)
     z0 = torch.floor(z)
@@ -40,61 +32,49 @@ def trilinear_sampler(
     y1 = y0 + 1
     z1 = z0 + 1
 
-    # Interpolation deltas
     xd = x - x0
     yd = y - y0
     zd = z - z0
 
-    # Flatten input for easier gather: (N, C, D*H*W)
+    # flatten for gather
     flat = input_vol.reshape(N, C, D * H * W)
 
-    b = torch.arange(N, device=input_vol.device)[:, None, None, None]
-    b = b.expand(N, D_out, H_out, W_out)
-
     def gather(ix, iy, iz):
-        """
-        ix, iy, iz: (N, D_out, H_out, W_out)
-        Returns:    (N, C, D_out, H_out, W_out)
-        """
-        if padding_mode == "zeros":
-            valid = (
-                (ix >= 0) & (ix <= W - 1) &
-                (iy >= 0) & (iy <= H - 1) &
-                (iz >= 0) & (iz <= D - 1)
-            )
-        else:
-            valid = None
+        valid = (
+            (ix >= 0) & (ix <= W - 1) &
+            (iy >= 0) & (iy <= H - 1) &
+            (iz >= 0) & (iz <= D - 1)
+        )
 
-        ix_safe = ix.clamp(0, W - 1)
-        iy_safe = iy.clamp(0, H - 1)
-        iz_safe = iz.clamp(0, D - 1)
+        ix = ix.clamp(0, W - 1)
+        iy = iy.clamp(0, H - 1)
+        iz = iz.clamp(0, D - 1)
 
-        lin = (iz_safe * H * W + iy_safe * W + ix_safe).long()
-        lin = lin.reshape(N, -1)  # (N, D_out*H_out*W_out)
+        lin = (iz * H * W + iy * W + ix).long()
+        lin = lin.view(N, -1)
 
         gathered = torch.gather(
             flat,
             2,
             lin.unsqueeze(1).expand(-1, C, -1)
-        )
-        gathered = gathered.reshape(N, C, D_out, H_out, W_out)
+        ).view(N, C, D_out, H_out, W_out)
 
-        if valid is not None:
-            gathered = gathered * valid.unsqueeze(1).to(gathered.dtype)
+        if padding_mode == "zeros":
+            gathered = gathered * valid.unsqueeze(1)
 
         return gathered
 
-    # Corner samples
-    c000 = gather(x0.long(), y0.long(), z0.long())
-    c001 = gather(x0.long(), y0.long(), z1.long())
-    c010 = gather(x0.long(), y1.long(), z0.long())
-    c011 = gather(x0.long(), y1.long(), z1.long())
-    c100 = gather(x1.long(), y0.long(), z0.long())
-    c101 = gather(x1.long(), y0.long(), z1.long())
-    c110 = gather(x1.long(), y1.long(), z0.long())
-    c111 = gather(x1.long(), y1.long(), z1.long())
+    # 8 corners
+    c000 = gather(x0, y0, z0)
+    c001 = gather(x0, y0, z1)
+    c010 = gather(x0, y1, z0)
+    c011 = gather(x0, y1, z1)
+    c100 = gather(x1, y0, z0)
+    c101 = gather(x1, y0, z1)
+    c110 = gather(x1, y1, z0)
+    c111 = gather(x1, y1, z1)
 
-    # Weights
+    # weights
     w000 = (1 - xd) * (1 - yd) * (1 - zd)
     w001 = (1 - xd) * (1 - yd) * zd
     w010 = (1 - xd) * yd * (1 - zd)
@@ -104,7 +84,7 @@ def trilinear_sampler(
     w110 = xd * yd * (1 - zd)
     w111 = xd * yd * zd
 
-    # Broadcast over channel
+    # expand
     w000 = w000.unsqueeze(1)
     w001 = w001.unsqueeze(1)
     w010 = w010.unsqueeze(1)

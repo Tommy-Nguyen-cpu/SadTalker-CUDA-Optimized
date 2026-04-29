@@ -24,7 +24,7 @@ from src.utils.face_enhancer import enhancer_generator_with_len, enhancer_list
 from src.utils.paste_pic import paste_pic
 from src.utils.videoio import save_video_with_watermark
 import tensorrt as trt
-from src.facerender.TensorRTWrapper import TensorRTWrapper
+from src.facerender.TensorRTWrapper import TensorRTWrapper, TensorRTWrapper2
 from time import time
 try:
     import webui  # in webui
@@ -39,8 +39,10 @@ class AnimateFromCoeff():
         with open(sadtalker_path['facerender_yaml']) as f:
             config = yaml.safe_load(f)
 
-        generator = TensorRTWrapper()
-        generator.load_engine("../scripts/generator_new.engine")
+        # generator = OcclusionAwareSPADEGenerator(**config['model_params']['generator_params'],
+        #                                             **config['model_params']['common_params'])
+        generator = TensorRTWrapper2()
+        generator.load_engine("../scripts/test_jacobian.engine")
         # kp_extractor = KPDetector(**config['model_params']['kp_detector_params'],
         #                             **config['model_params']['common_params'])
         kp_extractor = TensorRTWrapper()
@@ -155,8 +157,8 @@ class AnimateFromCoeff():
                discriminator.load_state_dict(checkpoint['discriminator'])
             except:
                print ('No discriminator in the state-dict. Dicriminator will be randomly initialized')
-        if optimizer_generator is not None:
-            optimizer_generator.load_state_dict(checkpoint['optimizer_generator'])
+        # if optimizer_generator is not None:
+        #     optimizer_generator.load_state_dict(checkpoint['optimizer_generator'])
         if optimizer_discriminator is not None:
             try:
                 optimizer_discriminator.load_state_dict(checkpoint['optimizer_discriminator'])

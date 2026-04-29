@@ -99,8 +99,8 @@ def keypoint_transformation(kp_canonical, he, wo_exp=False):
     return {'value': kp_transformed}
 
 
-# TODO: Okay, so I found a workaround that would allow me to convert the generator to tensorrt, but the model now outputs a black screen.
-# TODO: This is likely due to some issue with tensorrt/the format of the data. Will have to dig into it.
+# TODO: Tested with full precision, but looks like precision isn't the issue. It's likely an issue with some other aspect of the repo...
+# TODO: he_estimator is never used. Will update workflow to avoid loading it since that is also time consuming.
 def make_animation(source_image, source_semantics, target_semantics,
                             generator, kp_detector, he_estimator, mapping, 
                             yaw_c_seq=None, pitch_c_seq=None, roll_c_seq=None,
@@ -150,17 +150,31 @@ def make_animation(source_image, source_semantics, target_semantics,
             
             start = time()
             out = np.zeros(source_image.shape, dtype = np.float16)
-            print(f"output: {out.shape}")
-            print(f"source image: {source_image.shape}")
-            print(f"kp_source: {kp_source['value'].shape}")
-            print(f"kp_norm: {kp_norm['value'].shape}")
-            generator_input = [source_image.cpu().numpy().astype(np.float16), kp_source['value'].cpu().numpy().astype(np.float16), kp_norm['value'].cpu().numpy().astype(np.float16)]
-            out = generator(generator_input, out)
+            # print(f"output: {out.shape}")
+            # print(f"source image: {source_image.shape}")
+            # print(f"kp_source: {kp_source['value'].shape}")
+            # print(f"kp_norm: {kp_norm['value'].shape}")
             
-            # out = generator(source_image, kp_source['value'], kp_norm['value'])
+            jacobian_src = kp_source['jacobian'].astype(np.float16) if "jacobian" in kp_source else None
+            jacobian_driving = kp_norm['jacobian'].astype(np.float16) if "jacobian" in kp_norm else None
+            generator_input = [source_image.to(torch.float16), kp_norm['value'].to(torch.float16),  kp_source['value'].to(torch.float16)]
+            # TODO: Okay...looks like the order I passed in the inputs were entirely off. This resulted in worse quality pre-tensorrt...but post-tensorrt is still pretty bad.
+            # def allocate_buffers(self, input_shape, output_shapes, dtype=torch.float32)
+            if not generator.buffers_ready:
+                    input_shapes = [arr.shape for arr in generator_input if arr is not None]
+                    output_shapes = [source_image.shape]  # or correct list if multiple outputs
+                    generator.allocate_buffers(
+                    input_shapes=input_shapes,
+                    output_shapes=output_shapes,
+                    dtype=torch.float16
+                )
+            
+            generator.copy_inputs(generator_input)
+            out = generator()[0]
+            # out = generator(source_image, kp_norm['value'], kp_source['value'], jacobian_src, jacobian_driving)
             # if frame_idx == 0:
             #     print(f"Input shape: {source_image.shape}")
-            #     torch.onnx.export(generator, args={"source_image" : source_image, "kp_source" : kp_source['value'], "kp_driving" : kp_norm['value']}, f="../scripts/no_sample_grid_generator.onnx", export_params=True, opset_version=20)
+            #     torch.onnx.export(generator, do_constant_folding=True, args={"source_image" : source_image, "kp_source" : kp_source['value'], "kp_driving" : kp_norm['value'], "jacobian_source" : jacobian_src, "jacobian_driving": jacobian_driving}, f="../scripts/test_jacobian.onnx", export_params=True, opset_version=20)
 
             # print(f"Generator took: {time() - start}")
             # torch.onnx.export(generator, args={"source_image" : source_image, "kp_source" : kp_source, "kp_driving" : kp_norm}, f="face_render.onnx", export_params=True, opset_version=20)
